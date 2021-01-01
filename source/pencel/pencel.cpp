@@ -56,7 +56,7 @@ struct ColorMatchResult
     float distance = std::numeric_limits<float>::infinity();
 };
 
-struct OptimizationRound
+struct OptimizationStep
 {
     size_t colors_used = 0;
     float distance = 0.f;
@@ -84,12 +84,12 @@ ColorMatchResult best_match(math::argb32_t color, const std::vector<PencilInfo>&
     for(size_t ii = 0; ii < palette.size(); ++ii)
     {
         const auto& info = palette[ii];
-        // float dh = math::delta_E_cmetric(color, info.heavy_trace);
-        // float dl = math::delta_E_cmetric(color, info.light_trace);
-        float dh = math::delta_E2_CIE76(lighten(color, lfactor), info.heavy_trace);
-        float dl = math::delta_E2_CIE76(lighten(color, lfactor), info.light_trace);
-        // float dh = math::delta_E2_CIE94(color, info.heavy_trace);
-        // float dl = math::delta_E2_CIE94(color, info.light_trace);
+        // float dh = math::delta_E_cmetric(lighten(color, lfactor), info.heavy_trace);
+        // float dl = math::delta_E_cmetric(lighten(color, lfactor), info.light_trace);
+        // float dh = math::delta_E2_CIE76(lighten(color, lfactor), info.heavy_trace);
+        // float dl = math::delta_E2_CIE76(lighten(color, lfactor), info.light_trace);
+        float dh = math::delta_E2_CIE94(lighten(color, lfactor), info.heavy_trace);
+        float dl = math::delta_E2_CIE94(lighten(color, lfactor), info.light_trace);
         if(dh < result.distance)
             result = {ii, true, dh};
         if(dl < result.distance)
@@ -149,13 +149,16 @@ float optimize_lightness(const Image& image, const std::vector<PencilInfo>& pale
     // perceptive distance with colors in the palette
 
     size_t nsteps = 20;
-    std::vector<OptimizationRound> rounds;
-    auto cmp = [](math::argb32_t a, math::argb32_t b) { return a.value < b.value; };
+    std::vector<OptimizationStep> steps;
+    auto argb_cmp = [](math::argb32_t a, math::argb32_t b) { return a.value < b.value; };
     float max_dist = 0.f;
+    float min_dist = std::numeric_limits<float>::infinity();
+    size_t max_used = 0;
+    size_t min_used = std::numeric_limits<size_t>::max();
     for(size_t ii = 0; ii < nsteps; ++ii)
     {
-        float factor = 0.7f + 0.6f * float(ii) / float(nsteps - 1);
-        std::set<math::argb32_t, decltype(cmp)> colors_used;
+        float factor = 0.5f + 1.5f * float(ii) / float(nsteps - 1);
+        std::set<math::argb32_t, decltype(argb_cmp)> colors_used;
         float dist = 0.f;
         for(unsigned int row = 0; row < image.height; ++row)
         {
@@ -172,27 +175,32 @@ float optimize_lightness(const Image& image, const std::vector<PencilInfo>& pale
             }
         }
         dist = std::sqrt(dist);
-        rounds.push_back({colors_used.size(), dist, factor});
+        steps.push_back({colors_used.size(), dist, factor});
         if(dist > max_dist)
             max_dist = dist;
-
+        if(dist < min_dist)
+            min_dist = dist;
+        if(colors_used.size() > max_used)
+            max_used = colors_used.size();
+        if(colors_used.size() < min_used)
+            min_used = colors_used.size();
         KLOG("pencel", 1) << "Optimizing lightness: " << size_t(std::round(100.f * float(ii) / float(nsteps - 1)))
                           << '%' << std::endl;
     }
 
     float best_pareto = std::numeric_limits<float>::infinity();
     float best_factor = 1.f;
-    for(const auto& oround : rounds)
+    for(const auto& ostep : steps)
     {
-        float dist_score = oround.distance / max_dist;
-        float diversity_score = float(2 * palette.size()) / float(oround.colors_used);
+        float dist_score = (ostep.distance - min_dist) / (max_dist - min_dist);
+        float diversity_score = 1.f - float(ostep.colors_used - min_used) / float(max_used - min_used);
         float pareto = std::sqrt(diversity_score * diversity_score + dist_score * dist_score);
-        KLOG("pencel", 1) << "factor: " << oround.factor << " div: " << diversity_score << " dist:" << dist_score
+        KLOG("pencel", 1) << "factor: " << ostep.factor << " div: " << diversity_score << " dist:" << dist_score
                           << " pareto: " << pareto << std::endl;
         if(pareto < best_pareto)
         {
             best_pareto = pareto;
-            best_factor = oround.factor;
+            best_factor = ostep.factor;
         }
     }
     KLOG("pencel", 1) << "Best score: " << best_pareto << " -> factor: " << best_factor << std::endl;
@@ -266,7 +274,13 @@ int main(int argc, char** argv)
     img.height = height;
     img.pixels.resize(width * height * 3);
     rs::ResampleImage24(src.pixels.data(), src.width, src.height, img.pixels.data(), img.width, img.height,
-                        rs::KernelTypeBilinear);
+                        rs::KernelTypeLanczos5);
+
+    if(raw())
+    {
+        display_raw(img);
+        return 0;
+    }
 
     // * Optimize lightness
     float best_factor = 1.f;
@@ -277,19 +291,14 @@ int main(int argc, char** argv)
         img2.height = 32;
         img2.pixels.resize(width * height * 3);
         rs::ResampleImage24(src.pixels.data(), src.width, src.height, img2.pixels.data(), img2.width, img2.height,
-                            rs::KernelTypeBilinear);
+                            rs::KernelTypeLanczos5);
 
         best_factor = optimize_lightness(img2, palette);
     }
 
     // * Display image
-    if(raw())
-        display_raw(img);
-    else
-    {
-        display_raw(img);
-        display_palette(img, palette, best_factor);
-    }
+    // display_raw(img);
+    display_palette(img, palette, best_factor);
 
     return 0;
 }

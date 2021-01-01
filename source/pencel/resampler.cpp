@@ -1,15 +1,37 @@
 #include "resampler.h"
+#include <cmath>
 #include <cstring>
 #include <kibble/logger/logger.h>
 #include <memory>
+// #include <constants>
 
 namespace rs
 {
+
+// constexpr float k_pi = std::pi_v<float>;
+constexpr float k_pi = 3.14159265359f;
 
 inline int32_t clip_range(int32_t input, int32_t low, int32_t high)
 {
     return (input < low) ? low : (input > high) ? high : input;
 }
+
+inline float sinc(float f_x)
+{
+    if(f_x == 0.f)
+        return 1.f;
+    return std::sin(k_pi * f_x) / (k_pi * f_x);
+}
+
+inline float lanczos_weight(float f_n, float distance)
+{
+    if(distance <= f_n)
+    {
+        return sinc(distance) * sinc(distance / f_n);
+    }
+    return 0.0f;
+}
+
 enum KernelDirection : uint8_t
 {
     KernelDirectionUnknown,
@@ -95,13 +117,138 @@ bool SampleKernelBilinear(uint8_t* src, uint32_t src_width, uint32_t src_height,
     return false;
 }
 
+bool SampleKernelLanczosH(uint8_t* src, uint32_t src_width, uint32_t src_height, float f_x, float f_y, float coeff_a,
+                          uint8_t* output)
+{
+    if(!src || !src_width || !src_height || f_x < 0 || f_y < 0 || !output)
+    {
+        return false;
+    }
+
+    int32_t radius = int32_t(coeff_a);
+    float sample_count = 0;
+    float total_samples[3] = {0};
+
+    /* Scan the kernel space adding up the bicubic weights and pixel values. */
+    for(int32_t i = -radius; i < radius; i++)
+    {
+        int32_t i_x = int32_t(f_x) + i;
+        int32_t i_y = int32_t(f_y);
+
+        if(i_x < 0 || i_y < 0 || i_x > int32_t(src_width) - 1 || i_y > int32_t(src_height) - 1)
+        {
+            continue;
+        }
+
+        float x_delta = f_x - float(i_x);
+        float distance = std::abs(x_delta);
+        float weight = lanczos_weight(coeff_a, distance);
+
+        uint8_t* src_pixel = BLOCK_OFFSET_RGB24(src, src_width, i_x, unsigned(i_y));
+
+        /* accumulate bicubic weighted samples from the source. */
+        total_samples[0] += src_pixel[0] * weight;
+        total_samples[1] += src_pixel[1] * weight;
+        total_samples[2] += src_pixel[2] * weight;
+
+        /* record the total weights of the sample for later normalization. */
+        sample_count += weight;
+    }
+
+    /* Normalize our bicubic sum back to the valid pixel range. */
+    float scale_factor = 1.0f / sample_count;
+    output[0] = uint8_t(clip_range(int32_t(scale_factor * total_samples[0]), 0, 255));
+    output[1] = uint8_t(clip_range(int32_t(scale_factor * total_samples[1]), 0, 255));
+    output[2] = uint8_t(clip_range(int32_t(scale_factor * total_samples[2]), 0, 255));
+
+    return true;
+}
+
+bool SampleKernelLanczosV(uint8_t* src, uint32_t src_width, uint32_t src_height, float f_x, float f_y, float coeff_a,
+                          uint8_t* output)
+{
+    if(!src || !src_width || !src_height || f_x < 0 || f_y < 0 || !output)
+    {
+        return false;
+    }
+
+    int32_t radius = int32_t(coeff_a);
+    float sample_count = 0;
+    float total_samples[3] = {0};
+
+    /* Scan the kernel space adding up the bicubic weights and pixel values. */
+    for(int32_t i = -radius; i < radius; i++)
+    {
+        int32_t i_x = int32_t(f_x);
+        int32_t i_y = int32_t(f_y) + i;
+
+        if(i_x < 0 || i_y < 0 || i_x > int32_t(src_width) - 1 || i_y > int32_t(src_height) - 1)
+        {
+            continue;
+        }
+
+        float y_delta = f_y - float(i_y);
+        float distance = std::abs(y_delta);
+        float weight = lanczos_weight(coeff_a, distance);
+
+        uint8_t* src_pixel = BLOCK_OFFSET_RGB24(src, src_width, i_x, unsigned(i_y));
+
+        /* accumulate bicubic weighted samples from the source. */
+        total_samples[0] += src_pixel[0] * weight;
+        total_samples[1] += src_pixel[1] * weight;
+        total_samples[2] += src_pixel[2] * weight;
+
+        /* record the total weights of the sample for later normalization. */
+        sample_count += weight;
+    }
+
+    /* Normalize our bicubic sum back to the valid pixel range. */
+    float scale_factor = 1.0f / sample_count;
+    output[0] = uint8_t(clip_range(int32_t(scale_factor * total_samples[0]), 0, 255));
+    output[1] = uint8_t(clip_range(int32_t(scale_factor * total_samples[1]), 0, 255));
+    output[2] = uint8_t(clip_range(int32_t(scale_factor * total_samples[2]), 0, 255));
+
+    return true;
+}
+
+bool SampleKernelLanczos(uint8_t* src, uint32_t src_width, uint32_t src_height, KernelDirection direction, float f_x,
+                         float f_y, float coeff_a, uint8_t* output)
+{
+    switch(direction)
+    {
+    case KernelDirectionHorizontal:
+        return SampleKernelLanczosH(src, src_width, src_height, f_x, f_y, coeff_a, output);
+    case KernelDirectionVertical:
+        return SampleKernelLanczosV(src, src_width, src_height, f_x, f_y, coeff_a, output);
+    default:
+        return false;
+    }
+
+    return false;
+}
+
 bool SampleKernel(uint8_t* src, uint32_t src_width, uint32_t src_height, KernelDirection direction, float f_x,
                   float f_y, KernelType type, float /*h_ratio*/, float /*v_ratio*/, uint8_t* output)
 {
-    if(type == KernelTypeBilinear)
+    switch(type)
+    {
+    case KernelTypeBilinear:
         return SampleKernelBilinear(src, src_width, src_height, direction, f_x, f_y, output);
-    KLOGW("pencel") << "Kernel type not implemented." << std::endl;
-    return false;
+    case KernelTypeLanczos:
+        return SampleKernelLanczos(src, src_width, src_height, direction, f_x, f_y, 1, output);
+    case KernelTypeLanczos2:
+        return SampleKernelLanczos(src, src_width, src_height, direction, f_x, f_y, 2, output);
+    case KernelTypeLanczos3:
+        return SampleKernelLanczos(src, src_width, src_height, direction, f_x, f_y, 3, output);
+    case KernelTypeLanczos4:
+        return SampleKernelLanczos(src, src_width, src_height, direction, f_x, f_y, 4, output);
+    case KernelTypeLanczos5:
+        return SampleKernelLanczos(src, src_width, src_height, direction, f_x, f_y, 5, output);
+    default: {
+        KLOGW("pencel") << "Kernel type not implemented." << std::endl;
+        return false;
+    }
+    }
 }
 
 bool ResampleImage24(uint8_t* src, uint32_t src_width, uint32_t src_height, uint8_t* dst, uint32_t dst_width,
