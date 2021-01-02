@@ -2,7 +2,18 @@
 
 using namespace kb;
 
-ColorMatchResult best_match(math::argb32_t color, const std::vector<PencilInfo>& palette, DeltaE method, const glm::vec2& factors)
+kb::math::argb32_t hsl_transform(kb::math::argb32_t input, const glm::vec2& factors)
+{
+    if(factors[0] == 1.f && factors[1] == 1.f)
+        return input;
+    kb::math::ColorHSLA hsl(input);
+    hsl.s = std::clamp(hsl.s * factors[0], 0.f, 1.f);
+    hsl.l = std::clamp(hsl.l * factors[1], 0.f, 1.f);
+    return kb::math::pack_ARGB(kb::math::to_RGBA(hsl));
+}
+
+ColorMatchResult best_match(math::argb32_t color, const std::vector<PencilInfo>& palette, DeltaE method,
+                            const glm::vec2& factors)
 {
     ColorMatchResult result;
     for(size_t ii = 0; ii < palette.size(); ++ii)

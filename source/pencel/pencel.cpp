@@ -16,10 +16,10 @@
 #include <kibble/logger/logger.h>
 #include <kibble/logger/sink.h>
 
-#include "lodepng/lodepng.h"
-#include "resampler.h"
-#include "optimizer.h"
 #include "common.h"
+#include "lodepng/lodepng.h"
+#include "optimizer.h"
+#include "resampler.h"
 
 using namespace kb;
 namespace fs = std::filesystem;
@@ -140,11 +140,12 @@ int main(int argc, char** argv)
         if(*p == 0)
             info.light_trace = {light};
         // KLOGI << KF_(info.heavy_trace) << "HH " << KF_(info.light_trace) << "LL " << KC_ << info.name << std::endl;
-        KLOG("pencel",1) << KF_(info.heavy_trace) << "\u2588\u2588" << KF_(info.light_trace) << "\u2588\u2588" << KC_ << ' ';
+        KLOG("pencel", 1) << KF_(info.heavy_trace) << "\u2588\u2588" << KF_(info.light_trace) << "\u2588\u2588" << KC_
+                          << ' ';
         palette.push_back(std::move(info));
     }
 
-    KLOG("pencel",1) << std::endl;
+    KLOG("pencel", 1) << std::endl;
 
     // * Load image and resize it
     unsigned width = unsigned(outwidth());
@@ -177,17 +178,16 @@ int main(int argc, char** argv)
 
         HSLOptimizer optimizer;
         DescentParameters params;
-        // params.method = UpdateMethod::FDSA;
-        params.method = UpdateMethod::SPSA;
         params.initial_control = factors;
         params.initial_step = 1.f;
         params.initial_epsilon = 0.5f;
+        params.learning_bias = 0.f;
         params.convergence_delta = 5e-5f;
-        params.alpha = 0.602f;
-        params.gamma = 0.101f;
+        params.alpha = 0.602f; // Learning rate schedule
+        params.gamma = 0.101f; // Perturbation magnitude schedule
         params.max_iter = 200;
 
-        factors = optimizer.optimize_gd(img2, palette, params);
+        factors = optimizer.optimize_spsa(img2, palette, params);
     }
 
     // * Display image
