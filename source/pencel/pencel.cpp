@@ -9,18 +9,17 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <limits>
-#include <string>
 #include <vector>
 
 #include <kibble/argparse/argparse.h>
 #include <kibble/logger/dispatcher.h>
 #include <kibble/logger/logger.h>
 #include <kibble/logger/sink.h>
-#include <kibble/math/color.h>
 
 #include "lodepng/lodepng.h"
 #include "resampler.h"
+#include "optimizer.h"
+#include "common.h"
 
 using namespace kb;
 namespace fs = std::filesystem;
@@ -40,62 +39,6 @@ void show_error_and_die(ap::ArgParse& parser)
 
     KLOG("pencel", 1) << parser.usage() << std::endl;
     exit(0);
-}
-
-struct PencilInfo
-{
-    math::argb32_t heavy_trace;
-    math::argb32_t light_trace;
-    std::string name;
-};
-
-struct ColorMatchResult
-{
-    size_t index = 0;
-    bool heavy = true;
-    float distance = std::numeric_limits<float>::infinity();
-};
-
-struct OptimizationStep
-{
-    size_t colors_used = 0;
-    float distance = 0.f;
-    float factor = 1.f;
-};
-
-struct Image
-{
-    std::vector<unsigned char> pixels;
-    unsigned width, height;
-};
-
-inline math::argb32_t lighten(math::argb32_t input, float factor)
-{
-    if(factor == 1.f)
-        return input;
-    math::ColorHSLA hsl(input);
-    hsl.l = std::clamp(hsl.l * factor, 0.f, 1.f);
-    return math::pack_ARGB(math::to_RGBA(hsl));
-}
-
-ColorMatchResult best_match(math::argb32_t color, const std::vector<PencilInfo>& palette, float lfactor = 1.f)
-{
-    ColorMatchResult result;
-    for(size_t ii = 0; ii < palette.size(); ++ii)
-    {
-        const auto& info = palette[ii];
-        // float dh = math::delta_E_cmetric(lighten(color, lfactor), info.heavy_trace);
-        // float dl = math::delta_E_cmetric(lighten(color, lfactor), info.light_trace);
-        // float dh = math::delta_E2_CIE76(lighten(color, lfactor), info.heavy_trace);
-        // float dl = math::delta_E2_CIE76(lighten(color, lfactor), info.light_trace);
-        float dh = math::delta_E2_CIE94(lighten(color, lfactor), info.heavy_trace);
-        float dl = math::delta_E2_CIE94(lighten(color, lfactor), info.light_trace);
-        if(dh < result.distance)
-            result = {ii, true, dh};
-        if(dl < result.distance)
-            result = {ii, false, dl};
-    }
-    return result;
 }
 
 Image decode_png_file(const std::string& filename)
@@ -125,7 +68,7 @@ void display_raw(const Image& image)
     }
 }
 
-void display_palette(const Image& image, const std::vector<PencilInfo>& palette, float lightness_factor = 1.f)
+void display_palette(const Image& image, const std::vector<PencilInfo>& palette, const glm::vec2& factors)
 {
     KLOGR("pencel") << std::endl;
     for(unsigned int row = 0; row < image.height; ++row)
@@ -134,78 +77,12 @@ void display_palette(const Image& image, const std::vector<PencilInfo>& palette,
         {
             auto* pixel = BLOCK_OFFSET_RGB24(image.pixels.data(), image.width, col, row);
             auto value = math::pack_ARGB(pixel[0], pixel[1], pixel[2]);
-            auto bm = best_match(value, palette, lightness_factor);
+            auto bm = best_match(value, palette, DeltaE::CIE94, factors);
             auto bmc = (bm.heavy) ? palette[bm.index].heavy_trace : palette[bm.index].light_trace;
             KLOGR("pencel") << KF_(bmc) << "\u2588\u2588";
         }
         KLOGR("pencel") << std::endl;
     }
-}
-
-float optimize_lightness(const Image& image, const std::vector<PencilInfo>& palette)
-{
-    // Find the lightness factor that, when applied to the original image, will
-    // simultaneously maximize the color diversity and minimize the overall
-    // perceptive distance with colors in the palette
-
-    size_t nsteps = 20;
-    std::vector<OptimizationStep> steps;
-    auto argb_cmp = [](math::argb32_t a, math::argb32_t b) { return a.value < b.value; };
-    float max_dist = 0.f;
-    float min_dist = std::numeric_limits<float>::infinity();
-    size_t max_used = 0;
-    size_t min_used = std::numeric_limits<size_t>::max();
-    for(size_t ii = 0; ii < nsteps; ++ii)
-    {
-        float factor = 0.5f + 1.5f * float(ii) / float(nsteps - 1);
-        std::set<math::argb32_t, decltype(argb_cmp)> colors_used;
-        float dist = 0.f;
-        for(unsigned int row = 0; row < image.height; ++row)
-        {
-            for(unsigned int col = 0; col < image.width; ++col)
-            {
-                auto* pixel = BLOCK_OFFSET_RGB24(image.pixels.data(), image.width, col, row);
-                auto value = math::pack_ARGB(pixel[0], pixel[1], pixel[2]);
-                auto bm = best_match(value, palette, factor);
-                dist += bm.distance * bm.distance;
-                if(bm.heavy)
-                    colors_used.insert(palette[bm.index].heavy_trace);
-                else
-                    colors_used.insert(palette[bm.index].light_trace);
-            }
-        }
-        dist = std::sqrt(dist);
-        steps.push_back({colors_used.size(), dist, factor});
-        if(dist > max_dist)
-            max_dist = dist;
-        if(dist < min_dist)
-            min_dist = dist;
-        if(colors_used.size() > max_used)
-            max_used = colors_used.size();
-        if(colors_used.size() < min_used)
-            min_used = colors_used.size();
-        KLOG("pencel", 1) << "Optimizing lightness: " << size_t(std::round(100.f * float(ii) / float(nsteps - 1)))
-                          << '%' << std::endl;
-    }
-
-    float best_pareto = std::numeric_limits<float>::infinity();
-    float best_factor = 1.f;
-    for(const auto& ostep : steps)
-    {
-        float dist_score = (ostep.distance - min_dist) / (max_dist - min_dist);
-        float diversity_score = 1.f - float(ostep.colors_used - min_used) / float(max_used - min_used);
-        float pareto = std::sqrt(diversity_score * diversity_score + dist_score * dist_score);
-        KLOG("pencel", 1) << "factor: " << ostep.factor << " div: " << diversity_score << " dist:" << dist_score
-                          << " pareto: " << pareto << std::endl;
-        if(pareto < best_pareto)
-        {
-            best_pareto = pareto;
-            best_factor = ostep.factor;
-        }
-    }
-    KLOG("pencel", 1) << "Best score: " << best_pareto << " -> factor: " << best_factor << std::endl;
-
-    return best_factor;
 }
 
 int main(int argc, char** argv)
@@ -216,9 +93,9 @@ int main(int argc, char** argv)
     parser.set_log_output([](const std::string& str) { KLOG("pencel", 1) << str << std::endl; });
     parser.set_exit_on_special_command(true);
     const auto& raw = parser.add_flag('r', "raw", "Display exact image colors.");
-    const auto& opt_lightness =
-        parser.add_flag('l', "optimize-lightness",
-                        "Allow original picture lightness to vary, which could produce better looking results.");
+    const auto& optimize = parser.add_flag(
+        'o', "optimize",
+        "Allow original picture lightness and saturation to vary, which could produce better looking results.");
     const auto& source = parser.add_positional<std::string>("FILE", "Input PNG image file.");
     const auto& outwidth = parser.add_variable<int>('x', "width", "Output width.", 32);
     const auto& outheight = parser.add_variable<int>('y', "height", "Output height.", 32);
@@ -283,8 +160,8 @@ int main(int argc, char** argv)
     }
 
     // * Optimize lightness
-    float best_factor = 1.f;
-    if(opt_lightness())
+    glm::vec2 factors{1.f, 1.f};
+    if(optimize())
     {
         Image img2;
         img2.width = 32;
@@ -293,12 +170,21 @@ int main(int argc, char** argv)
         rs::ResampleImage24(src.pixels.data(), src.width, src.height, img2.pixels.data(), img2.width, img2.height,
                             rs::KernelTypeLanczos5);
 
-        best_factor = optimize_lightness(img2, palette);
+        HSLOptimizer optimizer;
+        // factors = optimizer.optimize_exhaustive(img2, palette);
+        SPSAParameters params;
+        params.initial_control = {1.f, 1.f};
+        params.initial_step = 2.f;
+        params.initial_epsilon = 0.4f;
+        params.convergence_delta = 0.001f;
+        params.max_iter = 100;
+
+        factors = optimizer.optimize_spsa(img2, palette, params);
     }
 
     // * Display image
     // display_raw(img);
-    display_palette(img, palette, best_factor);
+    display_palette(img, palette, factors);
 
     return 0;
 }
