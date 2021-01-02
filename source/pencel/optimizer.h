@@ -12,14 +12,14 @@ enum class UpdateMethod
 
 struct DescentParameters
 {
-    glm::vec2 initial_control = {0.5f, 0.5f};
+    glm::vec2 initial_control = {1.f, 1.f};
     float initial_step = 1.f;
-    float initial_epsilon = 0.2f;
-    float convergence_delta = 0.01f;
-    float alpha = 1.1f;
-    float gamma = 1.1f;
-    size_t max_iter = 100;
-    UpdateMethod method = UpdateMethod::FDSA;
+    float initial_epsilon = 0.5f;
+    float convergence_delta = 0.0005f;
+    float alpha = 0.602f;
+    float gamma = 0.101f;
+    size_t max_iter = 200;
+    UpdateMethod method = UpdateMethod::SPSA;
 };
 
 class HSLOptimizer

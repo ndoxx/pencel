@@ -177,12 +177,12 @@ int main(int argc, char** argv)
 
         HSLOptimizer optimizer;
         DescentParameters params;
-        params.method = UpdateMethod::FDSA;
-        // params.method = UpdateMethod::SPSA;
+        // params.method = UpdateMethod::FDSA;
+        params.method = UpdateMethod::SPSA;
         params.initial_control = factors;
         params.initial_step = 1.f;
         params.initial_epsilon = 0.5f;
-        params.convergence_delta = 0.0005f;
+        params.convergence_delta = 5e-5f;
         params.alpha = 0.602f;
         params.gamma = 0.101f;
         params.max_iter = 200;

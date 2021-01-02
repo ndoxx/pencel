@@ -15,26 +15,18 @@ struct OptimizationStep
     float s_factor = 1.f;
 };
 
-inline float calculate_transform_penalty(float factor)
-{
-    // This polynomial evaluates to 1 at 0.5, 0 at 1 and 1 at 2
-    // p(x) = -2*x^3 + 9*x^2 - 12*x + 5
-    return 5.f - 12 * factor + 9 * factor * factor - 2 * factor * factor * factor;
-}
-
-inline float factor_sampling_density(float ss)
-{
-    // This polynomial plateaus at 1 around ss=0.5
-    // It allows to sample the optimization manifold more densely for factor values close to 1
-    // p(x) = 4.166666666666667*x^3 - 5.25*x^2 + 2.5833333333333335*x + 0.5
-    return 0.5f + 2.5833333333333335f * ss - 5.25f * ss * ss + 4.166666666666667f * ss * ss * ss;
-}
-
 inline void constrain(glm::vec2& uu)
 {
     float uu0_clamp = std::max(std::min(uu[0], 2.f), 0.f);
     float uu1_clamp = std::max(std::min(uu[1], 4.f), 0.f);
     uu = {uu0_clamp, uu1_clamp};
+}
+
+inline float bernoulli_remap(bool value) { return value ? 1.f : -1.f; }
+
+inline void exponential_moving_average(float& accumulator, float new_value, float alpha)
+{
+    accumulator = (alpha * new_value) + (1.f - alpha) * accumulator;
 }
 
 glm::vec2 HSLOptimizer::optimize_gd(const Image& image, const std::vector<PencilInfo>& palette,
@@ -45,45 +37,57 @@ glm::vec2 HSLOptimizer::optimize_gd(const Image& image, const std::vector<Pencil
 
     std::random_device r;
     std::default_random_engine gen(r());
-    std::uniform_real_distribution<float> dis(-1.f, 1.f);
+    std::bernoulli_distribution dis(0.5);
 
     size_t iter = 0;
-    float delta = std::numeric_limits<float>::infinity();
+    float filtered_loss = 1.f;
+    float old_loss = std::numeric_limits<float>::infinity();
     glm::vec2 uu = params.initial_control;
     std::array<glm::vec2, 2> dir = {glm::vec2{1.f, 0.f}, glm::vec2{0.f, 1.f}};
-    while(iter < params.max_iter && delta > params.convergence_delta)
+    while(iter < params.max_iter && std::abs(filtered_loss - old_loss) > params.convergence_delta)
     {
         float ak = params.initial_step / std::pow(float(iter + 1), params.alpha);
         float ck = params.initial_epsilon / std::pow(float(iter + 1), params.gamma);
+        float current_loss = 0.f;
 
         glm::vec2 g;
         switch(params.method)
         {
         case UpdateMethod::FDSA: {
-            float g0 = (0.5f / ck) * (combine(loss(image, palette, uu + ck * dir[0])) -
-                                      combine(loss(image, palette, uu - ck * dir[0])));
-            float g1 = (0.5f / ck) * (combine(loss(image, palette, uu + ck * dir[1])) -
-                                      combine(loss(image, palette, uu - ck * dir[1])));
+            float forward_loss_0 = combine(loss(image, palette, uu + ck * dir[0]));
+            float backward_loss_0 = combine(loss(image, palette, uu - ck * dir[0]));
+            float forward_loss_1 = combine(loss(image, palette, uu + ck * dir[1]));
+            float backward_loss_1 = combine(loss(image, palette, uu - ck * dir[1]));
+            float g0 = (0.5f / ck) * (forward_loss_0 - backward_loss_1);
+            float g1 = (0.5f / ck) * (forward_loss_1 - backward_loss_1);
             g = {g0, g1};
+            current_loss = 0.25f * (forward_loss_0 + backward_loss_0 + forward_loss_1 + backward_loss_1);
             break;
         }
         case UpdateMethod::SPSA: {
-            glm::vec2 rvec{dis(gen), dis(gen)};
+            glm::vec2 rvec{bernoulli_remap(dis(gen)), bernoulli_remap(dis(gen))};
             rvec = glm::normalize(rvec);
-            float h = (combine(loss(image, palette, uu + ck * rvec)) - combine(loss(image, palette, uu - ck * rvec)));
+            float forward_loss = combine(loss(image, palette, uu + ck * rvec));
+            float backward_loss = combine(loss(image, palette, uu - ck * rvec));
+            float h = (forward_loss - backward_loss);
             g = {h * (0.5f / (ck * rvec[0])), h * (0.5f / (ck * rvec[1]))};
+            current_loss = 0.5f * (forward_loss + backward_loss);
             break;
         }
         }
 
-        auto old_uu = uu;
+        // Update and constrain control parameters
         uu -= ak * g;
         constrain(uu);
-        delta = glm::distance(uu, old_uu);
+
+        // IIR filter applied to the current loss to limit sensitivity to loss jittering
+        old_loss = filtered_loss;
+        exponential_moving_average(filtered_loss, current_loss, 0.1f);
 
         KLOG("pencel", 1) << "\033[1A\033[K\033[1A\033[K\033[1A\033[K\033[1A\033[K" << std::endl;
         KLOG("pencel", 1) << "Iteration: " << iter << std::endl;
-        KLOGI << "ck: " << ck << " ak: " << ak << " delta: " << delta << std::endl;
+        KLOGI << "ck: " << ck << " ak: " << ak << " loss: " << current_loss
+              << " delta: " << std::abs(filtered_loss - old_loss) << std::endl;
         KLOGI << "control: [" << uu[0] << ',' << uu[1] << ']' << std::endl;
 
         ++iter;
