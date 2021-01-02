@@ -99,6 +99,8 @@ int main(int argc, char** argv)
     const auto& source = parser.add_positional<std::string>("FILE", "Input PNG image file.");
     const auto& outwidth = parser.add_variable<int>('x', "width", "Output width.", 32);
     const auto& outheight = parser.add_variable<int>('y', "height", "Output height.", 32);
+    const auto& saturation_factor = parser.add_variable<float>('s', "saturation", "Saturation factor.", 1.f);
+    const auto& lightness_factor = parser.add_variable<float>('l', "lightness", "Lightness factor.", 1.f);
 
     bool success = parser.parse(argc, argv);
 
@@ -137,9 +139,12 @@ int main(int argc, char** argv)
         uint32_t light = uint32_t(std::strtol(s_light.c_str(), &p, 16));
         if(*p == 0)
             info.light_trace = {light};
-        KLOGI << KF_(info.heavy_trace) << "HH " << KF_(info.light_trace) << "LL " << KC_ << info.name << std::endl;
+        // KLOGI << KF_(info.heavy_trace) << "HH " << KF_(info.light_trace) << "LL " << KC_ << info.name << std::endl;
+        KLOG("pencel",1) << KF_(info.heavy_trace) << "\u2588\u2588" << KF_(info.light_trace) << "\u2588\u2588" << KC_ << ' ';
         palette.push_back(std::move(info));
     }
+
+    KLOG("pencel",1) << std::endl;
 
     // * Load image and resize it
     unsigned width = unsigned(outwidth());
@@ -160,25 +165,27 @@ int main(int argc, char** argv)
     }
 
     // * Optimize lightness
-    glm::vec2 factors{1.f, 1.f};
+    glm::vec2 factors{lightness_factor(), saturation_factor()};
     if(optimize())
     {
         Image img2;
-        img2.width = 32;
-        img2.height = 32;
+        img2.width = img.width / 2;
+        img2.height = img.height / 2;
         img2.pixels.resize(width * height * 3);
         rs::ResampleImage24(src.pixels.data(), src.width, src.height, img2.pixels.data(), img2.width, img2.height,
                             rs::KernelTypeLanczos5);
 
         HSLOptimizer optimizer;
-        // factors = optimizer.optimize_exhaustive(img2, palette);
         DescentParameters params;
-        params.method = Method::FDSA;
-        params.initial_control = {1.f, 1.f};
-        params.initial_step = 2.f;
+        params.method = UpdateMethod::FDSA;
+        // params.method = UpdateMethod::SPSA;
+        params.initial_control = factors;
+        params.initial_step = 1.f;
         params.initial_epsilon = 0.5f;
-        params.convergence_delta = 0.001f;
-        params.max_iter = 150;
+        params.convergence_delta = 0.0005f;
+        params.alpha = 0.602f;
+        params.gamma = 0.101f;
+        params.max_iter = 200;
 
         factors = optimizer.optimize_gd(img2, palette, params);
     }
