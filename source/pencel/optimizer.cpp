@@ -2,6 +2,7 @@
 #include "resampler.h"
 #include <fstream>
 #include <kibble/logger/logger.h>
+#include <random>
 #include <set>
 
 using namespace kb;
@@ -14,7 +15,7 @@ struct OptimizationStep
     float s_factor = 1.f;
 };
 
-inline float calculate_closeness_score(float factor)
+inline float calculate_transform_penalty(float factor)
 {
     // This polynomial evaluates to 1 at 0.5, 0 at 1 and 1 at 2
     // p(x) = -2*x^3 + 9*x^2 - 12*x + 5
@@ -91,7 +92,7 @@ glm::vec2 HSLOptimizer::optimize_exhaustive(const Image& image, const std::vecto
         const auto& ostep = steps[ii];
         // Penalize extreme lightness factors
         float closeness_score =
-            0.5f * (calculate_closeness_score(ostep.l_factor) + calculate_closeness_score(ostep.s_factor));
+            0.5f * (calculate_transform_penalty(ostep.l_factor) + calculate_transform_penalty(ostep.s_factor));
         // Penalize big overall perceptive difference w.r.t original
         float fidelity_score = (ostep.distance - min_dist) / (max_dist - min_dist);
         // Penalize low color diversity
@@ -116,9 +117,13 @@ glm::vec2 HSLOptimizer::optimize_exhaustive(const Image& image, const std::vecto
     return {best_l_factor, best_s_factor};
 }
 
-glm::vec2 HSLOptimizer::optimize_spsa(const Image& image, const std::vector<PencilInfo>& palette,
-                                      const SPSAParameters& params)
+glm::vec2 HSLOptimizer::optimize_gd(const Image& image, const std::vector<PencilInfo>& palette,
+                                    const DescentParameters& params)
 {
+    std::random_device r;
+    std::default_random_engine gen(r());
+    std::uniform_real_distribution<float> dis(-1.f, 1.f);
+
     size_t iter = 0;
     float ste = params.initial_step;
     float eps = params.initial_epsilon;
@@ -127,27 +132,49 @@ glm::vec2 HSLOptimizer::optimize_spsa(const Image& image, const std::vector<Penc
     std::array<glm::vec2, 2> dir = {glm::vec2{1.f, 0.f}, glm::vec2{0.f, 1.f}};
     while(iter < params.max_iter && delta > params.convergence_delta)
     {
-        float g0 = (0.5f / eps) * (loss(image, palette, uu + eps * dir[0]) - loss(image, palette, uu - eps * dir[0]));
-        float g1 = (0.5f / eps) * (loss(image, palette, uu + eps * dir[1]) - loss(image, palette, uu - eps * dir[1]));
+        glm::vec2 g;
+        switch(params.method)
+        {
+        case Method::FDSA: {
+            float g0 = (0.5f / eps) * (combine(loss(image, palette, uu + eps * dir[0])) -
+                                       combine(loss(image, palette, uu - eps * dir[0])));
+            float g1 = (0.5f / eps) * (combine(loss(image, palette, uu + eps * dir[1])) -
+                                       combine(loss(image, palette, uu - eps * dir[1])));
+            g = {g0, g1};
+            break;
+        }
+        case Method::SPSA: {
+            glm::vec2 rvec{dis(gen), dis(gen)};
+            rvec = glm::normalize(rvec);
+            float g0 = (0.5f / (eps * rvec[0])) * (combine(loss(image, palette, uu + eps * rvec[0])) -
+                                                   combine(loss(image, palette, uu - eps * rvec[0])));
+            float g1 = (0.5f / (eps * rvec[1])) * (combine(loss(image, palette, uu + eps * rvec[1])) -
+                                                   combine(loss(image, palette, uu - eps * rvec[1])));
+            g = {g0, g1};
+            break;
+        }
+        }
 
         auto old_uu = uu;
-        uu -= ste * glm::vec2{g0, g1};
+        uu -= ste * g;
         delta = glm::distance(uu, old_uu);
 
         KLOG("pencel", 1) << "Iteration: " << iter << std::endl;
         KLOGI << "epsilon: " << eps << " step: " << ste << " delta: " << delta << std::endl;
         KLOGI << "control: [" << uu[0] << ',' << uu[1] << ']' << std::endl;
 
-        eps *= 0.99f;
-        ste *= 0.95f;
+        eps *= 0.97f;
+        ste *= 0.97f;
         ++iter;
     }
     return uu;
 }
 
-float HSLOptimizer::loss(const Image& image, const std::vector<PencilInfo>& palette, const glm::vec2& control)
+glm::vec3 HSLOptimizer::loss(const Image& image, const std::vector<PencilInfo>& palette, const glm::vec2& control)
 {
-    constexpr float max_dist = 10000.f; // Maximal CIE94 difference (black and white)
+	// The fidelity loss is computed using the faster CMetric color difference
+
+    constexpr float max_dist = 764.833f; // Maximal CMETRIC difference (black and white)
     auto argb_cmp = [](math::argb32_t a, math::argb32_t b) { return a.value < b.value; };
 
     float fidelity_loss = 0.f;
@@ -158,8 +185,7 @@ float HSLOptimizer::loss(const Image& image, const std::vector<PencilInfo>& pale
         {
             auto* pixel = BLOCK_OFFSET_RGB24(image.pixels.data(), image.width, col, row);
             auto value = math::pack_ARGB(pixel[0], pixel[1], pixel[2]);
-            auto bm = best_match(value, palette, DeltaE::CIE94, control);
-            // auto bm = best_match(value, palette, DeltaE::CMETRIC, control);
+            auto bm = best_match(value, palette, DeltaE::CMETRIC, control);
             fidelity_loss += bm.distance;
             if(bm.heavy)
                 colors_used.insert(palette[bm.index].heavy_trace);
@@ -168,13 +194,17 @@ float HSLOptimizer::loss(const Image& image, const std::vector<PencilInfo>& pale
         }
     }
 
+    // Low overall perceptive color difference w.r.t original image is penalized
     fidelity_loss /= (max_dist * float(image.height * image.width));
-    fidelity_loss *= 100.f;
+    // Low color diversity is penalized
     float diversity_loss = 1.f - float(colors_used.size()) / float(2 * palette.size());
-    float transform_penalty = std::abs(control[0] - 1.f);
-    // float transform_penalty = 0.5f*glm::distance(control, {1.f, 1.f});
-    // KLOGW("pencel") << fidelity_loss << '/' << diversity_loss << '/' << transform_penalty << std::endl;
-    // return std::sqrt(fidelity_loss * fidelity_loss + diversity_loss * diversity_loss +
-    //                  transform_penalty * transform_penalty);
-    return (fidelity_loss + diversity_loss + transform_penalty) / 3.f;
+    // Heavy HSL manipulation is penalized
+    float transform_penalty = glm::distance(control, {1.f, 1.f});
+    return {fidelity_loss, diversity_loss, transform_penalty};
+}
+
+float HSLOptimizer::combine(glm::vec3 loss_vector)
+{
+	// return (loss_vector[0] + loss_vector[1] + loss_vector[2]) / 3.f;
+	return glm::length(loss_vector);
 }

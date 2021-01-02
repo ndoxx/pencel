@@ -172,14 +172,15 @@ int main(int argc, char** argv)
 
         HSLOptimizer optimizer;
         // factors = optimizer.optimize_exhaustive(img2, palette);
-        SPSAParameters params;
+        DescentParameters params;
+        params.method = Method::FDSA;
         params.initial_control = {1.f, 1.f};
         params.initial_step = 2.f;
-        params.initial_epsilon = 0.4f;
+        params.initial_epsilon = 0.5f;
         params.convergence_delta = 0.001f;
-        params.max_iter = 100;
+        params.max_iter = 150;
 
-        factors = optimizer.optimize_spsa(img2, palette, params);
+        factors = optimizer.optimize_gd(img2, palette, params);
     }
 
     // * Display image
