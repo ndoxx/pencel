@@ -78,11 +78,33 @@ void display_palette(const Image& image, const std::vector<PencilInfo>& palette,
             auto* pixel = BLOCK_OFFSET_RGB24(image.pixels.data(), image.width, col, row);
             auto value = math::pack_ARGB(pixel[0], pixel[1], pixel[2]);
             auto bm = best_match(value, palette, DeltaE::CIE94, factors);
-            auto bmc = (bm.heavy) ? palette[bm.index].heavy_trace : palette[bm.index].light_trace;
+            auto bmc = palette[bm.index].value;
             KLOGR("pencel") << KF_(bmc) << "\u2588\u2588";
         }
         KLOGR("pencel") << std::endl;
     }
+}
+
+void export_grid(const std::string& filename, const Image& image, const std::vector<PencilInfo>& palette, const glm::vec2& factors)
+{
+    KLOGN("pencel") << "Exporting grid to:" << std::endl;
+    KLOGI << KS_PATH_ << filename << std::endl;
+
+    std::ofstream ofs(filename);
+    ofs << image.width << ' ' << image.height << std::endl;
+    for(unsigned int row = 0; row < image.height; ++row)
+    {
+        for(unsigned int col = 0; col < image.width; ++col)
+        {
+            auto* pixel = BLOCK_OFFSET_RGB24(image.pixels.data(), image.width, col, row);
+            auto value = math::pack_ARGB(pixel[0], pixel[1], pixel[2]);
+            auto bm = best_match(value, palette, DeltaE::CIE94, factors);
+            ofs << palette[bm.index].name << ' ';
+        }
+    }
+    ofs << std::endl;
+
+    KLOGG("pencel") << "done." << std::endl;
 }
 
 int main(int argc, char** argv)
@@ -93,6 +115,7 @@ int main(int argc, char** argv)
     parser.set_log_output([](const std::string& str) { KLOG("pencel", 1) << str << std::endl; });
     parser.set_exit_on_special_command(true);
     const auto& raw = parser.add_flag('r', "raw", "Display exact image colors.");
+    const auto& explore = parser.add_flag('e', "explore", "Sample loss manifold.");
     const auto& optimize = parser.add_flag(
         'o', "optimize",
         "Allow original picture lightness and saturation to vary, which could produce better looking results.");
@@ -122,30 +145,7 @@ int main(int argc, char** argv)
     }
 
     // * Import palette
-    KLOGN("pencel") << "Importing palette:" << std::endl;
-    std::vector<PencilInfo> palette;
-    std::ifstream ifs("../data/faber-castell.txt");
-    std::string line;
-    while(std::getline(ifs, line))
-    {
-        std::stringstream linestream(line);
-        PencilInfo info;
-        std::string s_heavy, s_light;
-        linestream >> info.name >> s_heavy >> s_light;
-        char* p;
-        uint32_t heavy = uint32_t(std::strtol(s_heavy.c_str(), &p, 16));
-        if(*p == 0)
-            info.heavy_trace = {heavy};
-        uint32_t light = uint32_t(std::strtol(s_light.c_str(), &p, 16));
-        if(*p == 0)
-            info.light_trace = {light};
-        // KLOGI << KF_(info.heavy_trace) << "HH " << KF_(info.light_trace) << "LL " << KC_ << info.name << std::endl;
-        KLOG("pencel", 1) << KF_(info.heavy_trace) << "\u2588\u2588" << KF_(info.light_trace) << "\u2588\u2588" << KC_
-                          << ' ';
-        palette.push_back(std::move(info));
-    }
-
-    KLOG("pencel", 1) << std::endl;
+    auto palette = import_palette("../data/faber-castell.txt");
 
     // * Load image and resize it
     unsigned width = unsigned(outwidth());
@@ -165,8 +165,26 @@ int main(int argc, char** argv)
         return 0;
     }
 
+    glm::vec2 factors{saturation_factor(), lightness_factor()};
+
+    HSLOptimizer optimizer;
+    DescentParameters params;
+    params.initial_control = factors;
+    params.initial_step = 1.f;
+    params.initial_epsilon = 0.5f;
+    params.learning_bias = 0.f;
+    params.convergence_delta = 5e-5f;
+    params.alpha = 0.602f; // Learning rate schedule
+    params.gamma = 0.101f; // Perturbation magnitude schedule
+    params.max_iter = 200;
+
+    if(explore())
+    {
+        optimizer.sample_loss_manifold("manifold.dat", img, palette, 100, 100);
+        return 0;
+    }
+
     // * Optimize lightness
-    glm::vec2 factors{lightness_factor(), saturation_factor()};
     if(optimize())
     {
         Image img2;
@@ -176,23 +194,20 @@ int main(int argc, char** argv)
         rs::ResampleImage24(src.pixels.data(), src.width, src.height, img2.pixels.data(), img2.width, img2.height,
                             rs::KernelTypeLanczos5);
 
-        HSLOptimizer optimizer;
-        DescentParameters params;
-        params.initial_control = factors;
-        params.initial_step = 1.f;
-        params.initial_epsilon = 0.5f;
-        params.learning_bias = 0.f;
-        params.convergence_delta = 5e-5f;
-        params.alpha = 0.602f; // Learning rate schedule
-        params.gamma = 0.101f; // Perturbation magnitude schedule
-        params.max_iter = 200;
-
         factors = optimizer.optimize_spsa(img2, palette, params);
     }
 
     // * Display image
-    // display_raw(img);
     display_palette(img, palette, factors);
+
+    // * Export grid
+    if((img.width % 8 != 0) || (img.height % 8 != 0))
+    {
+        KLOGW("pencel") << "Image dimensions must be multiples of 8 for grid export to work." << std::endl;
+        return 0;
+    }
+
+    export_grid("grid.txt", img, palette, factors);
 
     return 0;
 }

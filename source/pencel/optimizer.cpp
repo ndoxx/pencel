@@ -17,8 +17,8 @@ struct OptimizationStep
 
 inline void constrain(glm::vec2& uu)
 {
-    float uu0_clamp = std::max(std::min(uu[0], 2.f), 0.f);
-    float uu1_clamp = std::max(std::min(uu[1], 4.f), 0.f);
+    float uu0_clamp = std::max(std::min(uu[0], 4.f), 0.f);
+    float uu1_clamp = std::max(std::min(uu[1], 2.f), 0.f);
     uu = {uu0_clamp, uu1_clamp};
 }
 
@@ -119,6 +119,28 @@ glm::vec2 HSLOptimizer::optimize_spsa(const Image& image, const std::vector<Penc
     return uu;
 }
 
+void HSLOptimizer::sample_loss_manifold(const std::string& filename, const Image& image,
+                                        const std::vector<PencilInfo>& palette, size_t size_x, size_t size_y)
+{
+    initial_loss_ = {1.f, 1.f, 1.f};
+    initial_loss_ = loss(image, palette, {1.f, 1.f});
+
+    KLOGN("pencel") << "Sampling loss manifold." << std::endl;
+    std::ofstream ofs(filename);
+    for(size_t ii = 0; ii < size_x; ++ii)
+    {
+        float ss = 4.f * float(ii) / float(size_x - 1);
+        for(size_t jj = 0; jj < size_y; ++jj)
+        {
+            float ll = 2.f * float(jj) / float(size_y - 1);
+            float J = scalarize(loss(image, palette, {ss, ll}));
+            ofs << ss << ' ' << ll << ' ' << J << std::endl;
+        }
+        ofs << std::endl;
+        KLOGI << size_t(std::round(100.f * float(ii) / float(size_x - 1))) << '%' << std::endl;
+    }
+}
+
 glm::vec3 HSLOptimizer::loss(const Image& image, const std::vector<PencilInfo>& palette, const glm::vec2& control)
 {
     auto argb_cmp = [](math::argb32_t a, math::argb32_t b) { return a.value < b.value; };
@@ -135,17 +157,16 @@ glm::vec3 HSLOptimizer::loss(const Image& image, const std::vector<PencilInfo>& 
             // The fidelity loss is computed using the faster CMetric color difference
             auto bm = best_match(value, palette, DeltaE::CMETRIC, control);
             fidelity_loss += bm.distance;
-            if(bm.heavy)
-                colors_used.insert(palette[bm.index].heavy_trace);
-            else
-                colors_used.insert(palette[bm.index].light_trace);
+            colors_used.insert(palette[bm.index].value);
         }
     }
 
     // Low color diversity is penalized
     float diversity_loss = 1.f - float(colors_used.size()) / float(2 * palette.size());
     // Heavy HSL manipulation is penalized
-    float transform_penalty = 0.6f * std::abs(control[0] - 1.f) + 0.4f * std::abs(control[1] - 1.f);
+    float s_factor = (control[0] - 1.f) * (control[0] - 1.f);
+    float l_factor = (control[1] - 1.f) * (control[1] - 1.f);
+    float transform_penalty = 0.2f * s_factor + 0.8f * l_factor;
     // Normalize loss using initial loss as a reference
     glm::vec3 loss = {fidelity_loss / initial_loss_[0], diversity_loss / initial_loss_[1], transform_penalty};
     return loss;
@@ -153,6 +174,5 @@ glm::vec3 HSLOptimizer::loss(const Image& image, const std::vector<PencilInfo>& 
 
 float HSLOptimizer::scalarize(glm::vec3 loss_vector)
 {
-    // return (loss_vector[0] + loss_vector[1] + loss_vector[2]) / 3.f;
-    return glm::length(loss_vector);
+    return (loss_vector[0] + loss_vector[1] + loss_vector[2]) / 3.f;
 }

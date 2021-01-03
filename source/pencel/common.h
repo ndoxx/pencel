@@ -7,15 +7,13 @@
 
 struct PencilInfo
 {
-    kb::math::argb32_t heavy_trace;
-    kb::math::argb32_t light_trace;
+    kb::math::argb32_t value;
     std::string name;
 };
 
 struct ColorMatchResult
 {
     size_t index = 0;
-    bool heavy = true;
     float distance = std::numeric_limits<float>::infinity();
 };
 
@@ -36,3 +34,5 @@ kb::math::argb32_t hsl_transform(kb::math::argb32_t input, const glm::vec2& fact
 
 ColorMatchResult best_match(kb::math::argb32_t color, const std::vector<PencilInfo>& palette,
                             DeltaE method = DeltaE::CIE76, const glm::vec2& factors = {1.f, 1.f});
+
+std::vector<PencilInfo> import_palette(const std::string& filename);

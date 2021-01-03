@@ -1,4 +1,7 @@
 #include "common.h"
+#include <fstream>
+#include <kibble/logger/logger.h>
+#include <sstream>
 
 using namespace kb;
 
@@ -19,26 +22,57 @@ ColorMatchResult best_match(math::argb32_t color, const std::vector<PencilInfo>&
     for(size_t ii = 0; ii < palette.size(); ++ii)
     {
         const auto& info = palette[ii];
-        float dh, dl;
+        float dist;
         switch(method)
         {
         case DeltaE::CMETRIC:
-            dh = math::delta_E_cmetric(hsl_transform(color, factors), info.heavy_trace);
-            dl = math::delta_E_cmetric(hsl_transform(color, factors), info.light_trace);
+            dist = math::delta_E_cmetric(hsl_transform(color, factors), info.value);
             break;
         case DeltaE::CIE76:
-            dh = math::delta_E2_CIE76(hsl_transform(color, factors), info.heavy_trace);
-            dl = math::delta_E2_CIE76(hsl_transform(color, factors), info.light_trace);
+            dist = math::delta_E2_CIE76(hsl_transform(color, factors), info.value);
             break;
         case DeltaE::CIE94:
-            dh = math::delta_E2_CIE94(hsl_transform(color, factors), info.heavy_trace);
-            dl = math::delta_E2_CIE94(hsl_transform(color, factors), info.light_trace);
+            dist = math::delta_E2_CIE94(hsl_transform(color, factors), info.value);
             break;
         }
-        if(dh < result.distance)
-            result = {ii, true, dh};
-        if(dl < result.distance)
-            result = {ii, false, dl};
+        if(dist < result.distance)
+            result = {ii, dist};
     }
     return result;
+}
+
+std::vector<PencilInfo> import_palette(const std::string& filename)
+{
+    KLOGN("pencel") << "Importing palette:" << std::endl;
+    std::vector<PencilInfo> palette;
+    std::ifstream ifs(filename);
+    std::string line;
+    while(std::getline(ifs, line))
+    {
+        std::stringstream linestream(line);
+        PencilInfo info_heavy;
+        PencilInfo info_light;
+        std::string s_heavy, s_light;
+        linestream >> info_heavy.name >> s_heavy >> s_light;
+        info_light.name = info_heavy.name + '*';
+        char* p;
+        uint32_t heavy = uint32_t(std::strtol(s_heavy.c_str(), &p, 16));
+        if(*p == 0)
+        {
+            info_heavy.value = {heavy};
+        }
+        uint32_t light = uint32_t(std::strtol(s_light.c_str(), &p, 16));
+        if(*p == 0)
+        {
+            info_light.value = {light};
+        }
+        // KLOGI << KF_(info.heavy_trace) << "HH " << KF_(info.light_trace) << "LL " << KC_ << info.name << std::endl;
+        KLOG("pencel", 1) << KF_(info_heavy.value) << "\u2588\u2588" << KF_(info_light.value) << "\u2588\u2588" << KC_
+                          << ' ';
+        palette.push_back(std::move(info_heavy));
+        palette.push_back(std::move(info_light));
+    }
+
+    KLOG("pencel", 1) << std::endl;
+    return palette;
 }

@@ -33,6 +33,9 @@ public:
     glm::vec2 optimize_spsa(const Image& image, const std::vector<PencilInfo>& palette,
                             const DescentParameters& params);
 
+    void sample_loss_manifold(const std::string& filename, const Image& image, const std::vector<PencilInfo>& palette,
+                              size_t size_x, size_t size_y);
+
 private:
     // Loss functions: results are collected in a vector
     glm::vec3 loss(const Image& image, const std::vector<PencilInfo>& palette, const glm::vec2& control);
