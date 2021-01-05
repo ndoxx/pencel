@@ -168,7 +168,7 @@ int main(int argc, char** argv)
     glm::vec2 factors{saturation_factor(), lightness_factor()};
 
     HSLOptimizer optimizer;
-    DescentParameters params;
+    kb::opt::DescentParameters<glm::vec2> params;
     params.initial_control = factors;
     params.initial_step = 1.f;
     params.initial_epsilon = 0.5f;

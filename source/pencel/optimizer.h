@@ -3,24 +3,7 @@
 #include "common.h"
 #include <glm/glm.hpp>
 #include <vector>
-
-enum class UpdateMethod
-{
-    FDSA,
-    SPSA
-};
-
-struct DescentParameters
-{
-    glm::vec2 initial_control = {1.f, 1.f};
-    float initial_step = 1.f;
-    float initial_epsilon = 0.5f;
-    float learning_bias = 0.f;
-    float convergence_delta = 0.0005f;
-    float alpha = 0.602f;
-    float gamma = 0.101f;
-    size_t max_iter = 200;
-};
+#include <kibble/algorithm/optimization.h>
 
 class HSLOptimizer
 {
@@ -28,10 +11,10 @@ public:
     // Optimize HSL transformation on input image so as to maximize color diversity
     // Gradient descent: Finite Difference Stochastic Approximation (slow)
     glm::vec2 optimize_fdsa(const Image& image, const std::vector<PencilInfo>& palette,
-                            const DescentParameters& params);
+                            const kb::opt::DescentParameters<glm::vec2>& params);
     // Gradient descent: Simultaneous Perturbation Stochastic Approximation (fast)
     glm::vec2 optimize_spsa(const Image& image, const std::vector<PencilInfo>& palette,
-                            const DescentParameters& params);
+                            const kb::opt::DescentParameters<glm::vec2>& params);
 
     void sample_loss_manifold(const std::string& filename, const Image& image, const std::vector<PencilInfo>& palette,
                               size_t size_x, size_t size_y);
