@@ -49,9 +49,9 @@ glm::vec2 HSLOptimizer::optimize_fdsa(const Image& image, const std::vector<Penc
     opt::StochasticDescentOptimizer<glm::vec2> optimizer;
     optimizer.set_loss([this,&image,&palette](const glm::vec2& control){return scalarize(loss(image, palette, control));});
     optimizer.set_constraint([](glm::vec2& control){constrain(control);});
-    optimizer.set_iteration_callback([](size_t iter, const glm::vec2& control)
+    optimizer.set_iteration_callback([](size_t iter, const glm::vec2& control, float loss)
     {
-        KLOG("pencel", 1) << "Iteration: " << iter << " control: [" << control[0] << ',' << control[1] << ']' << std::endl;
+        KLOG("pencel", 1) << "Iteration: " << iter << " control: [" << control[0] << ',' << control[1] << "] loss=" << loss << std::endl;
     });
 
     return optimizer.FDSA(params);
@@ -67,9 +67,9 @@ glm::vec2 HSLOptimizer::optimize_spsa(const Image& image, const std::vector<Penc
     opt::StochasticDescentOptimizer<glm::vec2> optimizer;
     optimizer.set_loss([this,&image,&palette](const glm::vec2& control){return scalarize(loss(image, palette, control));});
     optimizer.set_constraint([](glm::vec2& control){constrain(control);});
-    optimizer.set_iteration_callback([](size_t iter, const glm::vec2& control)
+    optimizer.set_iteration_callback([](size_t iter, const glm::vec2& control, float loss)
     {
-        KLOG("pencel", 1) << "Iteration: " << iter << " control: [" << control[0] << ',' << control[1] << ']' << std::endl;
+        KLOG("pencel", 1) << "Iteration: " << iter << " control: [" << control[0] << ',' << control[1] << "] loss=" << loss << std::endl;
     });
 
     return optimizer.SPSA(params);

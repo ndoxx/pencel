@@ -171,7 +171,7 @@ int main(int argc, char** argv)
     kb::opt::DescentParameters<glm::vec2> params;
     params.initial_control = factors;
     params.initial_step = 1.f;
-    params.initial_epsilon = 0.5f;
+    params.initial_radius = 0.5f;
     params.learning_bias = 0.f;
     params.convergence_delta = 5e-5f;
     params.alpha = 0.602f; // Learning rate schedule
