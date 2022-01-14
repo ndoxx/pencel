@@ -101,7 +101,7 @@ glm::vec3 HSLOptimizer::loss(const Image& image, const std::vector<PencilInfo>& 
 {
     auto argb_cmp = [](math::argb32_t a, math::argb32_t b) { return a.value < b.value; };
 
-    // Low overall perceptive color difference w.r.t original image is penalized
+    // High overall perceptive color difference w.r.t original image is penalized
     float fidelity_loss = 0.f;
     std::set<math::argb32_t, decltype(argb_cmp)> colors_used;
     for(unsigned int row = 0; row < image.height; ++row)
